@@ -51,6 +51,18 @@ NeuralProphet's trend/seasonality/holiday decomposition) and are natural **ensem
 members** and **challenger baselines**. ARIMA is ~10× faster than seasonal SARIMAX for
 nearly the same accuracy.
 
+### Hourly (last 2 folds)
+
+| Model | Mean CV MAPE | MAE | Note |
+|---|---|---|---|
+| ARIMA | 8.49% | 420 MW | works; ~2 min/2 folds |
+| NeuralProphet | 17.12% | 788 MW | works but weak at hourly (a daily/weekly model; one fold hit 25%) |
+| SARIMAX | — | — | not run: seasonal MLE over ~60 exog × ~20k rows is impractically slow |
+
+Confirms the alternatives are **daily-oriented**: at hourly they fall far behind the
+lag-driven tree. Use them (if at all) at daily resolution and/or inside an ensemble —
+not as an hourly champion. SARIMAX-hourly is not recommended (cost ≫ benefit).
+
 ## Suggested next steps (not done here)
 - Add these to `train.py` / `src/api/model_registry.py` as optional challengers, or to
   `EnsembleForecaster`, rather than the LGB-vs-XGB champion race (they're slower and
