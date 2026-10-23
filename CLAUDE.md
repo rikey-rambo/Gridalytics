@@ -1,98 +1,88 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code / AI assistants working in this repository.
 
 ## Project Overview
 
-Antigravity Kit is an AI-powered design intelligence toolkit providing searchable databases of UI styles, color palettes, font pairings, chart types, and UX guidelines. It works as a skill/workflow for AI coding assistants (Claude Code, Windsurf, Cursor, etc.).
+Gridalytics forecasts electricity demand for the **Delhi power grid** at **5-minute,
+hourly, and daily** resolutions. It has a FastAPI backend, a Next.js 14 dashboard, and
+an automated data pipeline (Delhi SLDC SCADA + Open-Meteo weather/AQI + Indian
+holidays). Models are chosen by **champion/challenger walk-forward cross-validation**
+(lowest MAPE wins), with no data leakage.
 
-## Search Command
+## Key Commands
 
 ```bash
-python3 src/ui-ux-pro-max/scripts/search.py "<query>" --domain <domain> [-n <max_results>]
+# Backend deps
+pip install -r requirements.txt            # or: pip install -e .
+
+# Train (champion/challenger over LightGBM + XGBoost; add classical challengers)
+python -m src.training.train hourly        # or: daily / 5min
+
+# Run the API
+uvicorn src.api.main:app --reload --port 8000
+
+# Data collection (scheduler)
+python -m src.data.scheduler [--once]
+
+# Evaluate classical/alt models vs a LightGBM baseline
+python scripts/eval_classical.py sarimax arima neuralprophet --resolution daily
+
+# Event-effect estimator (prints the learned festival/holiday table)
+python src/forecasting/event_effects.py <path-to-edfs.db>
+
+# Frontend
+cd frontend && npm install && npm run dev   # build: npm run build
+
+# Tests
+python -m pytest tests/ -v
 ```
 
-**Domain search:**
-- `product` - Product type recommendations (SaaS, e-commerce, portfolio)
-- `style` - UI styles (glassmorphism, minimalism, brutalism) + AI prompts and CSS keywords
-- `typography` - Font pairings with Google Fonts imports
-- `color` - Color palettes by product type
-- `landing` - Page structure and CTA strategies
-- `chart` - Chart types and library recommendations
-- `ux` - Best practices and anti-patterns
+## Where things live
 
-**Stack search:**
-```bash
-python3 src/ui-ux-pro-max/scripts/search.py "<query>" --stack <stack>
-```
-Available stacks: `html-tailwind` (default), `react`, `nextjs`, `astro`, `vue`, `nuxtjs`, `nuxt-ui`, `svelte`, `swiftui`, `react-native`, `flutter`, `shadcn`, `jetpack-compose`
+- `config/settings.py` — Pydantic settings; `DATABASE_URL` from `.env` (sqlite
+  `data/edfs.db` locally, Postgres/Supabase in production).
+- `src/data/` — `scrapers/` (SLDC, Open-Meteo, AQI, holidays), `db/models.py`
+  (SQLAlchemy ORM), `loaders.py` (DB → DataFrame per resolution), `scheduler.py`.
+- `src/features/` — feature engineering; `pipeline.py` orchestrates temporal, weather,
+  calendar, rolling (~93 features). `calendar.py` also holds the optional
+  `expected_event_effect_pct` feature.
+- `src/models/` — `base.py` (`BaseForecaster` interface) + `lightgbm_model.py`,
+  `xgboost_model.py`, `sarimax_model.py` (SARIMAX **and** ARIMA), `neuralprophet_model.py`,
+  `lstm_model.py`, `ensemble.py`.
+- `src/evaluation/` — `cross_validation.py` (walk-forward CV), `metrics.py`.
+- `src/forecasting/` — `future.py` (recursive day-ahead engine; supports `overrides=`
+  what-if and `as_of=` leakage-free backtest), `tracker.py` (predicted vs actual),
+  `event_effects.py` (learned event-effect estimator).
+- `src/training/` — `train.py` (orchestrator + champion pick; `extra_models=` adds
+  classical challengers), `registry.py` (MLflow), `hyperopt.py` (Optuna).
+- `src/api/` — FastAPI app + routers; `model_registry.py` loads/serves models + ensemble.
+- `frontend/` — Next.js 14 app-router dashboard; data layer in `src/lib/api.ts` +
+  `src/lib/hooks.ts` (shared stale-while-revalidate cache).
+- `scripts/` — training/eval/backfill utilities. `docs/` — design & results write-ups.
+  `tests/` — pytest suite.
 
-## Architecture
+## Conventions
 
-```
-src/ui-ux-pro-max/                # Source of Truth
-├── data/                         # Canonical CSV databases
-│   ├── products.csv, styles.csv, colors.csv, typography.csv, ...
-│   └── stacks/                   # Stack-specific guidelines
-├── scripts/
-│   ├── search.py                 # CLI entry point
-│   ├── core.py                   # BM25 + regex hybrid search engine
-│   └── design_system.py          # Design system generation
-└── templates/
-    ├── base/                     # Base templates (skill-content.md, quick-reference.md)
-    └── platforms/                # Platform configs (claude.json, cursor.json, ...)
+- **No data leakage.** Evaluate with walk-forward CV; never fit on future data. For
+  historical backtests use `forecast_future(..., as_of=D)` so history/effect tables see
+  only data before `D`.
+- **New models implement `BaseForecaster`** (`fit / predict / predict_interval / save /
+  load / get_params / get_feature_importance`) — they then slot into CV, training, and
+  the registry/ensemble automatically.
+- **Linear models (SARIMAX/ARIMA)** use only genuine exogenous drivers as `exog`; the
+  `delhi_mw_*` target-history features (lag/diff/rolling) are excluded because they form
+  exact linear identities that leak the target. SARIMA models the target's own
+  autocorrelation via its `(p,d,q)(P,D,Q)` terms.
+- **Target** is `delhi_mw`; sub-regional DISCOM columns (`brpl_mw`, `bypl_mw`, …) are
+  excluded from features.
 
-cli/                              # CLI installer (uipro-cli on npm)
-├── src/
-│   ├── commands/init.ts          # Install command with template generation
-│   └── utils/template.ts         # Template rendering engine
-└── assets/                       # Bundled assets (~564KB)
-    ├── data/                     # Copy of src/ui-ux-pro-max/data/
-    ├── scripts/                  # Copy of src/ui-ux-pro-max/scripts/
-    └── templates/                # Copy of src/ui-ux-pro-max/templates/
+## Documentation
 
-.claude/skills/ui-ux-pro-max/     # Claude Code skill (symlinks to src/)
-.factory/skills/ui-ux-pro-max/   # Droid (Factory) skill (symlinks to src/)
-.shared/ui-ux-pro-max/            # Symlink to src/ui-ux-pro-max/
-.claude-plugin/                   # Claude Marketplace publishing
-```
-
-The search engine uses BM25 ranking combined with regex matching. Domain auto-detection is available when `--domain` is omitted.
-
-## Sync Rules
-
-**Source of Truth:** `src/ui-ux-pro-max/`
-
-When modifying files:
-
-1. **Data & Scripts** - Edit in `src/ui-ux-pro-max/`:
-   - `data/*.csv` and `data/stacks/*.csv`
-   - `scripts/*.py`
-   - Changes automatically available via symlinks in `.claude/`, `.factory/`, `.shared/`
-
-2. **Templates** - Edit in `src/ui-ux-pro-max/templates/`:
-   - `base/skill-content.md` - Common SKILL.md content
-   - `base/quick-reference.md` - Quick reference section (Claude only)
-   - `platforms/*.json` - Platform-specific configs
-
-3. **CLI Assets** - Run sync before publishing:
-   ```bash
-   cp -r src/ui-ux-pro-max/data/* cli/assets/data/
-   cp -r src/ui-ux-pro-max/scripts/* cli/assets/scripts/
-   cp -r src/ui-ux-pro-max/templates/* cli/assets/templates/
-   ```
-
-4. **Reference Folders** - No manual sync needed. The CLI generates these from templates during `uipro init`.
-
-## Prerequisites
-
-Python 3.x (no external dependencies required)
+- `docs/event_aware_forecasting.md` — event-effect layer design + measured results.
+- `docs/classical_models.md` — SARIMAX/ARIMA (full exogenous features) + NeuralProphet.
+- `docs/frontend_performance.md` — frontend load/tab-switch diagnosis + fixes.
 
 ## Git Workflow
 
-Never push directly to `main`. Always:
-
-1. Create a new branch: `git checkout -b feat/...` or `fix/...`
-2. Commit changes
-3. Push branch: `git push -u origin <branch>`
-4. Create PR: `gh pr create`
+Never push directly to `main`. Branch (`feat/…`, `fix/…`, `perf/…`), commit, push, open a PR.

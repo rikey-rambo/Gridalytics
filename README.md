@@ -37,6 +37,17 @@
 > All metrics from walk-forward cross-validation (10-12 folds). Real-time prediction tracking: **0.97% avg MAPE** over 29 days.
 >
 > **vs Previous System:** 137x better accuracy, 49x smaller models, proper methodology (no data leakage).
+>
+> SARIMAX/ARIMA now consume the full 93-feature exogenous set and NeuralProphet is fully wired — see [docs/classical_models.md](docs/classical_models.md) for the updated walk-forward eval.
+
+---
+
+## What's New
+
+- **Event-aware forecasting layer** — learns each festival/holiday's measured demand impact (Diwali ≈ −10%, Id-ul-Fitr ≈ +3%) from 10 years of daily history and exposes it as a leakage-free `expected_event_effect_pct` feature. Validated with walk-forward CV **and** a recursive day-ahead backtest; shipped behind a flag (`FeaturePipeline(..., include_event_effect=...)`). → [docs/event_aware_forecasting.md](docs/event_aware_forecasting.md)
+- **Classical models use the full feature set** — SARIMAX and a new **ARIMA** variant now take all ~93 engineered features as exogenous regressors (scaled, de-collinearized; target-history columns excluded to avoid linear leakage). Wired as optional challengers: `train(resolution, extra_models=["sarimax", "arima", "neuralprophet"])`. → [docs/classical_models.md](docs/classical_models.md)
+- **NeuralProphet completed & wired** — configurable regressors + robust predict; auto-joins the per-resolution ensemble and model registry when trained.
+- **Faster frontend** — a shared stale-while-revalidate cache makes tab switches instant (data no longer re-fetches from scratch on every navigation) and chart rendering is lighter. → [docs/frontend_performance.md](docs/frontend_performance.md)
 
 ---
 
@@ -54,8 +65,9 @@
 - Automated scheduler (7 jobs, runs 24/7)
 
 ### ML Models
-- **7 trained models** across 3 resolutions
-- 93 engineered features (lags, CDD, cyclical, rolling)
+- **7 models** across 3 resolutions (LightGBM, XGBoost, BiLSTM, NeuralProphet, SARIMAX, ARIMA, Ensemble)
+- Champion/challenger retraining — lowest walk-forward CV MAPE wins (classical challengers optional)
+- 93 engineered features + optional learned event-effect feature
 - Walk-forward cross-validation (no data leakage)
 - Future forecasting (recursive prediction, up to 90 days)
 - Prediction tracking (daily predicted vs actual)
@@ -274,13 +286,23 @@ print(f"Peak: {max(forecast['predicted_mw']):.0f} MW ({forecast['model_name']})"
 
 ---
 
+## Documentation
+
+| Doc | What |
+|-----|------|
+| [docs/event_aware_forecasting.md](docs/event_aware_forecasting.md) | Event-effect layer: design, methodology, measured CV + backtest results |
+| [docs/classical_models.md](docs/classical_models.md) | SARIMAX/ARIMA with the full exogenous feature set + NeuralProphet eval |
+| [docs/frontend_performance.md](docs/frontend_performance.md) | Frontend slow-load / tab-switch diagnosis and fixes |
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 14, Tailwind CSS, Framer Motion, Recharts, shadcn/ui |
 | Backend | FastAPI, SQLAlchemy, Pydantic, JWT (python-jose + bcrypt) |
-| ML | LightGBM, XGBoost, PyTorch (BiLSTM), NeuralProphet, SARIMAX |
+| ML | LightGBM, XGBoost, PyTorch (BiLSTM), NeuralProphet, SARIMAX, ARIMA |
 | Data | Supabase (PostgreSQL), APScheduler, BeautifulSoup, httpx |
 | MLOps | MLflow, Optuna, walk-forward CV, drift detection |
 | Deploy | Vercel + Render + Supabase + GitHub Actions ($0/month) |
