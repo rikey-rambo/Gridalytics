@@ -13,6 +13,20 @@ def load_models():
     from src.models.lightgbm_model import LightGBMForecaster
     from src.models.xgboost_model import XGBoostForecaster
 
+    loaders = [("lightgbm", LightGBMForecaster), ("xgboost", XGBoostForecaster)]
+    # Optional heavier models — only loaded if their artifacts exist on disk.
+    # Guarded so a missing statsmodels/torch never breaks API startup.
+    try:
+        from src.models.sarimax_model import SARIMAXForecaster, ARIMAForecaster
+        loaders += [("sarimax", SARIMAXForecaster), ("arima", ARIMAForecaster)]
+    except Exception as e:  # pragma: no cover
+        logger.info(f"SARIMAX/ARIMA not available: {e}")
+    try:
+        from src.models.neuralprophet_model import NeuralProphetForecaster
+        loaders += [("neuralprophet", NeuralProphetForecaster)]
+    except Exception as e:  # pragma: no cover
+        logger.info(f"NeuralProphet not available: {e}")
+
     model_dirs = {
         "5min": Path("models/5min"),
         "hourly": Path("models/hourly"),
@@ -24,7 +38,7 @@ def load_models():
             logger.warning(f"No models found for {resolution} at {base_dir}")
             continue
 
-        for model_name, loader in [("lightgbm", LightGBMForecaster), ("xgboost", XGBoostForecaster)]:
+        for model_name, loader in loaders:
             model_path = base_dir / model_name
             if model_path.exists() and (model_path / "meta.json").exists():
                 try:
