@@ -33,7 +33,11 @@ from src.features.weather import (
     add_weather_categories,
     add_solar_features,
 )
-from src.features.calendar import add_holiday_features, add_aqi_features
+from src.features.calendar import (
+    add_holiday_features,
+    add_aqi_features,
+    add_event_effect_feature,
+)
 from src.features.rolling import add_rolling_stats, add_rolling_weather_stats
 
 logger = logging.getLogger(__name__)
@@ -45,16 +49,24 @@ TARGET = "delhi_mw"
 class FeaturePipeline:
     """Orchestrates all feature engineering transforms."""
 
-    def __init__(self, resolution: str, session: Session):
+    def __init__(
+        self,
+        resolution: str,
+        session: Session,
+        include_event_effect: bool = True,
+    ):
         """
         Args:
             resolution: '5min', 'hourly', or 'daily'
             session: SQLAlchemy database session
+            include_event_effect: add the learned `expected_event_effect_pct`
+                feature. Toggle off to A/B the event layer via champion/challenger.
         """
         if resolution not in ("5min", "hourly", "daily"):
             raise ValueError(f"Invalid resolution: {resolution}")
         self.resolution = resolution
         self.session = session
+        self.include_event_effect = include_event_effect
 
     def build(
         self,
@@ -94,6 +106,8 @@ class FeaturePipeline:
         # Step 5: Merge calendar features (holidays, AQI)
         df = add_holiday_features(df, self.session)
         df = add_aqi_features(df, self.session)
+        if self.include_event_effect:
+            df = add_event_effect_feature(df, self.session)
 
         # Step 6: Add rolling statistics (before lags, as some lags use rolling)
         df = add_rolling_stats(df, TARGET, self.resolution)
