@@ -39,6 +39,21 @@ HOLDOUT_SIZES = {
 SUB_REGIONAL_COLS = ["brpl_mw", "bypl_mw", "ndpl_mw", "ndmc_mw", "mes_mw"]
 
 
+def _extra_model_class(name: str):
+    """Lazily import an optional challenger model class by name.
+
+    Deferred imports so train.py stays importable without statsmodels/torch.
+    """
+    name = name.lower()
+    if name in ("sarimax", "arima"):
+        from src.models.sarimax_model import SARIMAXForecaster, ARIMAForecaster
+        return SARIMAXForecaster if name == "sarimax" else ARIMAForecaster
+    if name == "neuralprophet":
+        from src.models.neuralprophet_model import NeuralProphetForecaster
+        return NeuralProphetForecaster
+    raise ValueError(f"unknown extra model: {name}")
+
+
 def _build_features(
     resolution: str,
     start_date: date | None = None,
@@ -119,6 +134,7 @@ def train(
     lgb_params: dict | None = None,
     xgb_params: dict | None = None,
     save_dir: str | Path = "models",
+    extra_models: list[str] | None = None,
 ) -> dict:
     """Full training pipeline: features -> CV -> MLflow -> champion -> save.
 
@@ -129,6 +145,9 @@ def train(
         lgb_params: Optional custom LightGBM hyperparameters.
         xgb_params: Optional custom XGBoost hyperparameters.
         save_dir: Base directory for saving models.
+        extra_models: Optional challengers to also evaluate and include in the
+            champion race, e.g. ["sarimax", "arima", "neuralprophet"]. Off by
+            default — they are slower and need statsmodels/torch.
 
     Returns:
         Dict with training results including champion model info and run IDs.
@@ -195,18 +214,32 @@ def train(
         )
         print(f"  XGBoost run: {xgb_run_id}")
 
-    # --- Step 5: Pick champion and train final model ---
+    # --- Optional extra challengers (SARIMAX / ARIMA / NeuralProphet) ---
+    candidates = {
+        "lightgbm": (lgb_mape, LightGBMForecaster, lgb_kwargs),
+        "xgboost": (xgb_mape, XGBoostForecaster, xgb_kwargs),
+    }
+    for name in (extra_models or []):
+        print(f"\n[+] Walk-forward CV: {name} (challenger)...")
+        try:
+            cls = _extra_model_class(name)
+            res = _run_cv(cls, df, target, features, resolution)
+            mape = res["mape"].mean() if not res.empty else 999.0
+            _print_cv_results(name, res)
+            if not res.empty:
+                log_training_run(
+                    name, resolution, cls(resolution=resolution).get_params(),
+                    {"mean_mape": mape, "mean_rmse": res["rmse"].mean(),
+                     "mean_mae": res["mae"].mean(), "n_folds": len(res)},
+                )
+            candidates[name] = (mape, cls, {})
+        except Exception as e:
+            print(f"  {name} skipped: {e}")
+
+    # --- Step 5: Pick champion (lowest CV MAPE across all evaluated models) ---
     print(f"\n[5/5] Training champion model...")
-    if lgb_mape <= xgb_mape:
-        champion_name = "lightgbm"
-        champion_class = LightGBMForecaster
-        champion_kwargs = lgb_kwargs
-        champion_mape = lgb_mape
-    else:
-        champion_name = "xgboost"
-        champion_class = XGBoostForecaster
-        champion_kwargs = xgb_kwargs
-        champion_mape = xgb_mape
+    champion_name = min(candidates, key=lambda k: candidates[k][0])
+    champion_mape, champion_class, champion_kwargs = candidates[champion_name]
 
     print(f"  Champion: {champion_name} (CV MAPE: {champion_mape:.2f}%)")
 
