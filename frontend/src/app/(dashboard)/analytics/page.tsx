@@ -21,7 +21,6 @@ const seasonColors: Record<string, string> = {
 
 export default function AnalyticsPage() {
   const { data: monthly } = useFetch(() => getHistorical(90, "daily"));
-  const { data: weekly } = useFetch(() => getHistorical(30, "hourly"));
   const { data: heatmap } = useFetch(() => getHeatmap(60));
   const { data: stats } = useFetch(getStats);
   const { data: seasonal } = useFetch(getSeasonalStats);
@@ -32,11 +31,6 @@ export default function AnalyticsPage() {
     time: new Date(t).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
     demand: monthly.demand_mw[i],
     temperature: monthly.temperature?.[i],
-  })) || [];
-
-  const weeklyChart = weekly?.timestamps.map((t, i) => ({
-    time: new Date(t).toLocaleString("en-IN", { month: "short", day: "numeric", hour: "2-digit" }),
-    demand: weekly.demand_mw[i],
   })) || [];
 
   // Compute daily averages for bar chart

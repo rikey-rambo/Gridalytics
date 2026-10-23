@@ -48,12 +48,12 @@ export function HeatmapChart({ hours, days, values }: HeatmapChartProps) {
                 {day.slice(0, 3)}
               </div>
               <div className="flex flex-1 gap-px">
+                {/* Plain divs (no per-cell framer-motion): a 60-day heatmap is
+                    ~1440 cells; animating each one individually janked the mount.
+                    CSS hover transitions are kept; the entrance stagger is dropped. */}
                 {(values[di] || []).map((val, hi) => (
-                  <motion.div
+                  <div
                     key={hi}
-                    initial={{ opacity: 0, scale: 0.5 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ duration: 0.3, delay: (di * 24 + hi) * 0.002 }}
                     className="flex-1 aspect-square rounded-sm cursor-pointer transition-transform hover:scale-110 hover:z-10 relative group"
                     style={{ backgroundColor: getColor(val, min, max) }}
                     title={`${day} ${hours[hi]}:00 — ${val.toFixed(0)} MW`}
@@ -61,7 +61,7 @@ export function HeatmapChart({ hours, days, values }: HeatmapChartProps) {
                     <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-card border border-border rounded px-1.5 py-0.5 text-[10px] font-mono text-foreground opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-20 shadow-lg">
                       {val.toFixed(0)} MW
                     </div>
-                  </motion.div>
+                  </div>
                 ))}
               </div>
             </div>
