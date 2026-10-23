@@ -11,8 +11,8 @@ import {
 } from "recharts";
 
 export default function AccuracyPage() {
-  const { data: history } = useFetch(() => getPredictionHistory(60), []);
-  const { data: trend } = useFetch(() => getAccuracyTrend(60), []);
+  const { data: history } = useFetch(() => getPredictionHistory(200), []);
+  const { data: trend } = useFetch(() => getAccuracyTrend(200), []);
 
   const entries = history?.entries || [];
   const withActuals = entries.filter((e: any) => e.actual_peak !== null);
@@ -162,7 +162,7 @@ export default function AccuracyPage() {
         className="rounded-xl border border-border bg-card overflow-hidden"
       >
         <div className="p-4 border-b border-border">
-          <h3 className="text-sm font-semibold">Prediction Log (Last 60 Days)</h3>
+          <h3 className="text-sm font-semibold">Prediction Log — Tracked Days</h3>
         </div>
         <div className="max-h-[400px] overflow-y-auto">
           <table className="w-full text-sm">

@@ -1,0 +1,13 @@
+# Normalize line endings: store text as LF in the repo and check out LF on all
+# platforms. Prevents the whole-file CRLF churn that happens when the repo is
+# edited on Windows (which otherwise shows every file as "modified").
+* text=auto eol=lf
+
+# Treat known binaries as binary (never line-ending converted or diffed as text)
+*.pptx binary
+*.db   binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.pdf  binary
