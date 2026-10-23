@@ -48,7 +48,9 @@ _HISTORY_ROWS_5MIN = 60_000   # ~200 days of 5-min → covers lag_2016 (7d) + ro
 _HISTORY_ROWS_RAW = 20_000    # 5-min rows we scan to build hourly/daily history
 
 
-def _get_history_at_resolution(session: Session, resolution: str) -> pd.Series:
+def _get_history_at_resolution(
+    session: Session, resolution: str, as_of: date | None = None
+) -> pd.Series:
     """Return demand as a Series indexed at the model's native resolution.
 
     hourly resolution → resample 5-min data with `.resample("1h").mean()`
@@ -58,14 +60,15 @@ def _get_history_at_resolution(session: Session, resolution: str) -> pd.Series:
     The resample step is what makes the inference-time lag values match the
     training-time features — the original bug was that inference read raw
     5-min snapshots while training used hourly means.
+
+    `as_of` caps history to timestamps strictly before that date — used for
+    leakage-free historical backtesting (forecast date D sees only data < D).
     """
     n_rows = _HISTORY_ROWS_5MIN if resolution == "5min" else _HISTORY_ROWS_RAW
-    records = (
-        session.query(DemandRecord.timestamp, DemandRecord.delhi_mw)
-        .order_by(DemandRecord.timestamp.desc())
-        .limit(n_rows)
-        .all()
-    )
+    q = session.query(DemandRecord.timestamp, DemandRecord.delhi_mw)
+    if as_of is not None:
+        q = q.filter(DemandRecord.timestamp < datetime.combine(as_of, datetime.min.time()))
+    records = q.order_by(DemandRecord.timestamp.desc()).limit(n_rows).all()
     if not records:
         return pd.Series(dtype=float, name="delhi_mw")
 
@@ -200,15 +203,55 @@ def _lookup_at(series: pd.Series, ts: pd.Timestamp) -> float | None:
     return None
 
 
+def _event_effect_for_date(
+    session: Session, target_date: date, overrides: dict | None,
+    as_of: date | None = None,
+) -> float:
+    """Learned event effect (signed fraction) for `target_date`, or 0.
+
+    Uses the full-sample learned table — causal for a future date, since every
+    historical occurrence precedes it. If `overrides` forces `is_holiday=0`, we
+    return 0 so the what-if counterfactual sees a normal (non-event) day.
+
+    `as_of` restricts the learned table to occurrences before that date, for
+    leakage-free historical backtesting (defaults to all history).
+    """
+    if overrides and "is_holiday" in overrides and int(overrides["is_holiday"]) == 0:
+        return 0.0
+    try:
+        from src.forecasting.event_effects import build_table, tier_of
+
+        holidays = session.query(HolidayRecord).filter(
+            HolidayRecord.date == target_date
+        ).all()
+        if not holidays:
+            return 0.0
+        table = build_table(session=session, as_of=as_of)
+        best = 0.0
+        for h in holidays:
+            e = table.get_effect(h.name, tier_of(h.name, h.type, h.category))
+            if abs(e) > abs(best):
+                best = e
+        return float(best)
+    except Exception as exc:
+        logger.warning(f"Event-effect lookup failed for {target_date}: {exc}")
+        return 0.0
+
+
 def forecast_future(
     resolution: str,
     target_date: date,
     model,
     session: Session,
     overrides: dict | None = None,
+    as_of: date | None = None,
 ) -> dict:
     """Predict every timestep of `target_date`. Returns a dict with keys
     `timestamps`, `predicted_mw`, `lower_bound_mw`, `upper_bound_mw`.
+
+    `as_of` caps demand history and the learned event table to data strictly
+    before that date, for leakage-free historical backtesting. Production calls
+    leave it None (use everything available).
     """
     logger.info(f"Future forecast: {resolution} for {target_date}")
 
@@ -216,7 +259,14 @@ def forecast_future(
         raise ValueError("Model does not expose feature_names")
     expected_features = model.feature_names
 
-    history = _get_history_at_resolution(session, resolution)
+    # Learned event effect for the target date (only if the model uses it, so
+    # models trained before this feature existed pay zero overhead). A
+    # what-if override of is_holiday=0 zeroes it, for a clean counterfactual.
+    event_effect = 0.0
+    if "expected_event_effect_pct" in expected_features:
+        event_effect = _event_effect_for_date(session, target_date, overrides, as_of)
+
+    history = _get_history_at_resolution(session, resolution, as_of)
     if history.empty:
         raise ValueError("No historical demand data available")
 
@@ -264,6 +314,7 @@ def forecast_future(
             lags=lags,
             step=step,
             overrides=overrides,
+            event_effect=event_effect,
         )
 
         X = pd.DataFrame([row], columns=expected_features).fillna(0)
@@ -310,6 +361,7 @@ def _build_row(
     lags: list[int],
     step: timedelta,
     overrides: dict | None,
+    event_effect: float = 0.0,
 ) -> dict:
     """Compute the model's expected feature vector for a single timestep.
 
@@ -508,6 +560,7 @@ def _build_row(
     maybe("days_since_last_holiday", 7)
     maybe("is_pre_holiday", 0)
     maybe("is_post_holiday", 0)
+    maybe("expected_event_effect_pct", event_effect)
 
     # ── AQI ────────────────────────────────────────────────────────────
     aqi = overrides.get("aqi", 100) if overrides else 100

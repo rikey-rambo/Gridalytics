@@ -5,11 +5,15 @@ that capture demand impacts from holidays, weekends, events, and
 the days surrounding them.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
 from src.data.db.models import HolidayRecord, AQIRecord
+
+logger = logging.getLogger(__name__)
 
 
 def add_holiday_features(df: pd.DataFrame, session: Session) -> pd.DataFrame:
@@ -88,6 +92,39 @@ def add_holiday_features(df: pd.DataFrame, session: Session) -> pd.DataFrame:
     df["is_pre_holiday"] = (df["days_to_next_holiday"] == 1).astype(int)
     df["is_post_holiday"] = (df["days_since_last_holiday"] == 1).astype(int)
 
+    return df
+
+
+def add_event_effect_feature(df: pd.DataFrame, session: Session) -> pd.DataFrame:
+    """Add `expected_event_effect_pct`: the historically-learned demand impact
+    of the day's event (festival/holiday), as a signed fraction.
+
+    Unlike the binary `is_holiday`/`is_festival` flags, this carries *magnitude
+    and direction* — e.g. Diwali ~ -0.10 (demand drops ~10%) vs Id-ul-Fitr
+    ~ +0.03 (demand rises). The value is learned from the long daily series
+    (`psp_daily`, ~10 yrs) and estimated **causally** (expanding window), so a
+    row never sees its own or any future year's outcome. Non-event days are 0.
+
+    Fails safe: on any error the column is added as all-zeros, so training and
+    inference never break if the long series or estimator is unavailable.
+    """
+    try:
+        from src.forecasting.event_effects import (
+            load_daily, load_events, causal_effect_feature,
+        )
+        daily = load_daily(session=session)
+        events = load_events(session=session)
+        eff = causal_effect_feature(daily, events)  # normalized Timestamp -> fraction
+        eff_map = {pd.Timestamp(k).normalize(): float(v) for k, v in eff.items()}
+
+        idx_norm = df.index.normalize()
+        df["expected_event_effect_pct"] = [eff_map.get(t, 0.0) for t in idx_norm]
+        n_nonzero = int((df["expected_event_effect_pct"].abs() > 1e-9).sum())
+        logger.info(f"expected_event_effect_pct set on {n_nonzero} rows "
+                    f"(from {len(eff_map)} learned event-days)")
+    except Exception as exc:
+        logger.warning(f"Event-effect feature unavailable ({exc}); defaulting to 0")
+        df["expected_event_effect_pct"] = 0.0
     return df
 
 
